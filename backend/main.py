@@ -51,8 +51,11 @@ def init_db():
     conn.close()
 
 # --- API ROUTES ---
-@app.route('/')
-def hello(): return "Backend is running!"
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def catch_all(path):
+    # Serve the React app's main file for any non-API route
+    return send_from_directory('../dist', 'index.html')
 
 @app.route('/expenses', methods=['GET', 'POST'])
 def handle_expenses():
