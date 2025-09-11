@@ -1,0 +1,7 @@
+{
+  "name": "AI Expense Extractor V4",
+  "description": "An intelligent expense tracking assistant that automatically extracts information from receipts using AI. Upload a receipt image, and the application will parse the details into a structured format, ready for submission.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
