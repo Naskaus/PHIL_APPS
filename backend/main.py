@@ -1,27 +1,40 @@
+import os
+import sys
+import time
+import json
+import base64
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
-import os
-import time
-from dotenv import load_dotenv
-from PIL import Image
-import json
-import sqlite3
-import base64
 from openai import OpenAI
+from sqlalchemy import text 
 
-# --- INITIALIZATION ---
-load_dotenv()
-app = Flask(__name__)
-CORS(app) 
+# Assure que le répertoire courant (backend) est dans sys.path pour les imports locaux
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
 
 # --- CONFIGURATION ---
-UPLOAD_FOLDER = 'uploads'
+# Importe la configuration appropriée (dev ou prod) depuis config.py
+from config import app_config
+
+app = Flask(__name__)
+app.config.from_object(app_config)
+
+# --- INITIALIZATION ---
+CORS(app)
+db = SQLAlchemy(app)
+
+# Définition du chemin d'upload (déjà corrigé)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)  # S'assure que le dossier existe
 
 # Configure OpenAI Client
 try:
-    openai_api_key = os.getenv("OPENAI_API_KEY")
+    openai_api_key = app.config.get('OPENAI_API_KEY')
     if not openai_api_key:
         raise ValueError("OPENAI_API_KEY not found in environment variables.")
     client = OpenAI(api_key=openai_api_key)
@@ -29,150 +42,122 @@ try:
 except Exception as e:
     print(f"FATAL: Failed to configure OpenAI Client: {e}")
 
+# --- DATABASE HELPERS ---
+def init_db_command():
+    """Commande pour initialiser la base de données."""
+    with app.app_context():
+        engine = db.get_engine()
+        with engine.connect() as connection:
+            # Choisit le DDL selon le dialecte (sqlite pour dev, mysql pour prod)
+            dialect = engine.dialect.name
+            if dialect == 'sqlite':
+                create_sql = text('''
+                    CREATE TABLE IF NOT EXISTS expenses (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date TEXT,
+                        expense_name TEXT,
+                        amount REAL,
+                        currency TEXT,
+                        paid_by TEXT,
+                        category TEXT,
+                        locations TEXT,
+                        status TEXT,
+                        receipt_url TEXT,
+                        notes TEXT
+                    );
+                ''')
+            else:
+                create_sql = text('''
+                    CREATE TABLE IF NOT EXISTS expenses (
+                        id INTEGER PRIMARY KEY AUTO_INCREMENT,
+                        date TEXT,
+                        expense_name TEXT,
+                        amount DOUBLE,
+                        currency VARCHAR(10),
+                        paid_by TEXT,
+                        category TEXT,
+                        locations TEXT,
+                        status TEXT,
+                        receipt_url TEXT,
+                        notes TEXT
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                ''')
 
-# --- DATABASE (SQLite for local dev) ---
-def get_db_connection():
-    conn = sqlite3.connect('local_expenses.db')
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, expense_name TEXT, 
-            amount REAL, currency TEXT, paid_by TEXT, category TEXT, locations TEXT,
-            status TEXT, receipt_url TEXT, notes TEXT
-        );
-    ''')
-    conn.commit()
-    cursor.close()
-    conn.close()
+            connection.execute(create_sql)
+            print("Database table 'expenses' checked/created (dialect: {} ).".format(dialect))
 
 # --- API ROUTES ---
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def catch_all(path):
-    # Serve the React app's main file for any non-API route
-    return send_from_directory('../dist', 'index.html')
+# Note: La gestion des routes reste très similaire, mais utilise l'engine SQLAlchemy
 
 @app.route('/api/expenses', methods=['GET', 'POST'])
-@app.route('/expenses', methods=['GET', 'POST'])  # backward-compat for old frontend bundles
 def handle_expenses():
-    conn = get_db_connection()
-    if request.method == 'GET':
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM expenses ORDER BY id DESC')
-        rows = cursor.fetchall()
-        expenses = [dict(row) for row in rows]
-        # Normalize locations JSON string to list
-        for item in expenses:
-            raw_loc = item.get('locations')
-            if isinstance(raw_loc, str) and raw_loc:
-                try:
-                    loaded = json.loads(raw_loc)
-                    item['locations'] = [str(x) for x in loaded] if isinstance(loaded, list) else []
-                except Exception:
+    engine = db.get_engine()
+    with engine.connect() as connection:
+        if request.method == 'GET':
+            result = connection.execute(text('SELECT * FROM expenses ORDER BY id DESC'))
+            expenses = [dict(row._mapping) for row in result]
+            # La logique de normalisation des locations reste la même
+            for item in expenses:
+                raw_loc = item.get('locations')
+                if isinstance(raw_loc, str) and raw_loc:
+                    try:
+                        item['locations'] = json.loads(raw_loc)
+                    except json.JSONDecodeError:
+                        item['locations'] = []
+                else:
                     item['locations'] = []
-            elif isinstance(raw_loc, list):
-                item['locations'] = [str(x) for x in raw_loc]
-            else:
-                item['locations'] = []
-        conn.close()
-        return jsonify(expenses)
+            return jsonify(expenses)
 
-    if request.method == 'POST':
-        data = request.get_json()
-        cursor = conn.cursor()
-        # Normalize "Paid By" to accept both 'paid_by' and 'Paid_By'
-        paid_by_value = data.get('paid_by') if data.get('paid_by') is not None else data.get('Paid_By')
-        # Handle category as simple text (support array by joining to a single string)
-        incoming_category = data.get('Category') if data.get('Category') is not None else data.get('category')
-        if isinstance(incoming_category, list):
-            category_text = ', '.join(str(x) for x in incoming_category)
-        elif isinstance(incoming_category, str):
-            category_text = incoming_category
-        else:
-            category_text = ''
+        if request.method == 'POST':
+            data = request.get_json()
 
-        # Handle locations as JSON array stored in DB
-        incoming_locations = data.get('locations')
-        if isinstance(incoming_locations, list):
-            locations_json = json.dumps([str(x) for x in incoming_locations])
-        else:
-            locations_json = json.dumps([])
+            # Normalisation des données (identique à l'ancien code)
+            paid_by_value = data.get('paid_by') or data.get('Paid_By')
+            category_data = data.get('Category') or data.get('category')
+            category_text = ', '.join(map(str, category_data)) if isinstance(category_data, list) else category_data
 
-        query = "INSERT INTO expenses (date, expense_name, amount, currency, paid_by, category, locations, status, receipt_url, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        values = (
-            data.get('Date'),
-            data.get('Expense_Name'),
-            data.get('Amount'),
-            data.get('Currency'),
-            paid_by_value,
-            category_text,
-            locations_json,
-            data.get('Status'),
-            data.get('Receipt_URL'),
-            data.get('Notes')
-        )
-        cursor.execute(query, values)
-        conn.commit()
-        conn.close()
-        return jsonify({'status': 'success'}), 201
+            locations_data = data.get('locations', [])
+            locations_json = json.dumps(locations_data) if isinstance(locations_data, list) else json.dumps([])
+
+            query = text("""
+                INSERT INTO expenses (date, expense_name, amount, currency, paid_by, category, locations, status, receipt_url, notes)
+                VALUES (:date, :expense_name, :amount, :currency, :paid_by, :category, :locations, :status, :receipt_url, :notes)
+            """)
+
+            connection.execute(query, {
+                'date': data.get('Date'),
+                'expense_name': data.get('Expense_Name'),
+                'amount': data.get('Amount'),
+                'currency': data.get('Currency'),
+                'paid_by': paid_by_value,
+                'category': category_text,
+                'locations': locations_json,
+                'status': data.get('Status'),
+                'receipt_url': data.get('Receipt_URL'),
+                'notes': data.get('Notes')
+            })
+            connection.commit()
+            return jsonify({'status': 'success'}), 201
 
 @app.route('/api/expenses/<int:expense_id>', methods=['DELETE'])
-@app.route('/expenses/<int:expense_id>', methods=['DELETE'])  # backward-compat
 def delete_expense(expense_id: int):
-    """Delete an expense by its ID.
-
-    Executes: DELETE FROM expenses WHERE id = ?
-    Returns 204 No Content on success, or 404 if nothing was deleted.
-    """
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM expenses WHERE id = ?', (expense_id,))
-        conn.commit()
-        deleted = cursor.rowcount
-        cursor.close()
-        conn.close()
-        if deleted == 0:
+    engine = db.get_engine()
+    with engine.connect() as connection:
+        result = connection.execute(text('DELETE FROM expenses WHERE id = :id'), {'id': expense_id})
+        connection.commit()
+        if result.rowcount == 0:
             return jsonify({'success': False, 'error': 'Not found'}), 404
-        # No content needed on successful delete
         return ('', 204)
-    except Exception as e:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/expenses/all', methods=['DELETE'])
-@app.route('/expenses/all', methods=['DELETE'])  # backward-compat
 def clear_all_expenses():
-    """Delete all expenses from the table.
-
-    Executes: DELETE FROM expenses
-    Returns 204 No Content on success.
-    """
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM expenses')
-        conn.commit()
-        cursor.close()
-        conn.close()
+    engine = db.get_engine()
+    with engine.connect() as connection:
+        connection.execute(text('DELETE FROM expenses'))
+        connection.commit()
         return ('', 204)
-    except Exception as e:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/upload', methods=['POST'])
-@app.route('/upload', methods=['POST'])  # backward-compat
 def upload_file():
     if 'receipt' not in request.files: return jsonify({'error': 'No file part'}), 400
     file = request.files['receipt']
@@ -181,13 +166,18 @@ def upload_file():
         original_filename = secure_filename(file.filename)
         timestamp = int(time.time())
         unique_filename = f"{timestamp}_{original_filename}"
+        # Utilise le chemin absolu configuré
         save_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(save_path)
         return jsonify({'filePath': f'/api/uploads/{unique_filename}'}), 200
     return jsonify({'error': 'An unknown error occurred'}), 500
 
+@app.route('/api/uploads/<path:filename>')
+def serve_upload(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+# La route /api/extract-details reste inchangée, elle n'interagit pas avec la DB
 @app.route('/api/extract-details', methods=['POST'])
-@app.route('/extract-details', methods=['POST'])  # backward-compat
 def extract_details():
     if 'receipt' not in request.files:
         return jsonify({'error': 'No image provided for extraction'}), 400
@@ -196,7 +186,6 @@ def extract_details():
 
     try:
         print(">>>> [1/3] Image received, encoding to base64...")
-        # Encode image to base64
         img_bytes = image_file.read()
         base64_image = base64.b64encode(img_bytes).decode('utf-8')
 
@@ -236,24 +225,33 @@ def extract_details():
         parsed_json = json.loads(cleaned_json_text)
         print(">>>> OPENAI RESPONSE:", parsed_json)
         return jsonify(parsed_json)
-        
+
     except Exception as e:
-        # Enhanced diagnostics
         print(f"!!!!!!!!!!!!!! ERROR IN /extract-details !!!!!!!!!!!!!!")
         print(f"ERROR TYPE: {type(e).__name__}")
         print(f"ERROR DETAILS: {e}")
         print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         return jsonify({"error": f"AI extraction failed. Server error: {str(e)}"}), 500
+# ... après la dernière route API (@app.route('/api/extract-details', ...))
 
-@app.route('/api/uploads/<path:filename>')
-@app.route('/uploads/<path:filename>')  # backward-compat
-def serve_upload(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+# --- SERVE REACT APP ---
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    """Sert l'application React en production."""
+    # Le chemin pointe vers le dossier 'dist' à la racine du projet
+    static_folder_path = os.path.join(app.root_path, '..', 'dist')
+    if path != "" and os.path.exists(os.path.join(static_folder_path, path)):
+        return send_from_directory(static_folder_path, path)
+    else:
+        return send_from_directory(static_folder_path, 'index.html')
+
 
 # --- MAIN EXECUTION ---
 if __name__ == '__main__':
-    init_db()
-    print("Database initialized. Running in Development (SQLite) mode.")
-    if not os.path.exists(UPLOAD_FOLDER):
-        os.makedirs(UPLOAD_FOLDER)
-    app.run(debug=True, port=5001)
+    # Initialise automatiquement la table en développement pour éviter les erreurs de table manquante
+    if app.config.get('DEBUG', False):
+        init_db_command()
+    print(f"Running in {app.config.get('DEBUG', 'production')} mode.")
+    print(f"Database URI: {app.config.get('SQLALCHEMY_DATABASE_URI')}")
+    app.run(host='0.0.0.0', port=5001, debug=app.config['DEBUG'])

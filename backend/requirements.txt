@@ -3,5 +3,7 @@ Flask-Cors
 python-dotenv
 Pillow
 mysql-connector-python
-mysql-connector-python
 openai
+SQLAlchemy
+PyMySQL
+Flask-SQLAlchemy
