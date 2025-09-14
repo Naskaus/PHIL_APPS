@@ -8,11 +8,12 @@ declare const jspdf: any;
 
 interface ExpenseListProps {
   expenses: Expense[];
-  onDeleteExpense: (index: number) => void;
+  onDeleteExpense: (id: number) => void;
   onViewReceipt: (url: string) => void;
+  onClearAll?: () => void;
 }
 
-const ExpenseList: React.FC<ExpenseListProps> = ({ expenses, onDeleteExpense, onViewReceipt }) => {
+const ExpenseList: React.FC<ExpenseListProps> = ({ expenses, onDeleteExpense, onViewReceipt, onClearAll }) => {
   const isValidCurrency = (c?: string): c is string => !!c && /^[A-Za-z]{3}$/.test(c);
   const formatCurrency = (amount: number, currency?: string): string => {
     const cur = isValidCurrency(currency) ? currency : 'THB';
@@ -149,14 +150,26 @@ const ExpenseList: React.FC<ExpenseListProps> = ({ expenses, onDeleteExpense, on
             <h2 className="text-2xl font-bold text-slate-700">
                 Expense History
             </h2>
-            <button
-              onClick={handleExportPDF}
-              disabled={expenses.length === 0}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 font-semibold rounded-lg hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-            >
-              <DownloadIcon className="w-4 h-4" />
-              Export PDF
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleExportPDF}
+                disabled={expenses.length === 0}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 font-semibold rounded-lg hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              >
+                <DownloadIcon className="w-4 h-4" />
+                Export PDF
+              </button>
+              {onClearAll && (
+                <button
+                  onClick={onClearAll}
+                  disabled={expenses.length === 0}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  title="Clear All History"
+                >
+                  Clear All History
+                </button>
+              )}
+            </div>
         </div>
         {expenses.length === 0 ? (
              <div className="text-center py-12 px-6">
@@ -170,18 +183,19 @@ const ExpenseList: React.FC<ExpenseListProps> = ({ expenses, onDeleteExpense, on
                     <tr>
                         <th className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Date</th>
                         <th className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Expense</th>
+                        <th className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-center">Paid By</th>
                         <th className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Amount</th>
-                        <th className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-center">Status</th>
+                        <th className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-center">Locations</th>
                         <th className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-center">Receipt</th>
                         <th className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-center">Actions</th>
                     </tr>
                     </thead>
                     <tbody>
-                    {expenses.map((expense, index) => (
+                    {expenses.map((expense) => (
                         <ExpenseListItem 
-                          key={`${expense.Expense_Name}-${expense.Date}-${index}`} 
+                          key={expense.id}
                           expense={expense}
-                          onDelete={() => onDeleteExpense(index)}
+                          onDelete={() => onDeleteExpense(expense.id)}
                           onViewReceipt={onViewReceipt}
                         />
                     ))}
@@ -189,9 +203,9 @@ const ExpenseList: React.FC<ExpenseListProps> = ({ expenses, onDeleteExpense, on
                     <tfoot>
                         {Object.entries(totalsByCurrency).map(([currency, total]) => (
                             <tr key={currency} className="bg-slate-100 border-t-2 border-slate-200">
-                                <td colSpan={2} className="p-4 text-sm font-bold text-slate-600 text-right">Total ({currency})</td>
+                                <td colSpan={3} className="p-4 text-sm font-bold text-slate-600 text-right">Total ({currency})</td>
                                 <td className="p-4 text-sm font-bold text-slate-800 text-right whitespace-nowrap">
-                                    {new Intl.NumberFormat(undefined, { style: 'currency', currency: currency, minimumFractionDigits: 2 }).format(total)}
+                                    {new Intl.NumberFormat(undefined, { style: 'currency', currency: currency, minimumFractionDigits: 2 }).format(Number(total))}
                                 </td>
                                 <td colSpan={3}></td>
                             </tr>

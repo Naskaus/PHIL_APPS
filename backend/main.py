@@ -42,7 +42,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, expense_name TEXT, 
-            amount REAL, currency TEXT, paid_by TEXT, category TEXT, 
+            amount REAL, currency TEXT, paid_by TEXT, category TEXT, locations TEXT,
             status TEXT, receipt_url TEXT, notes TEXT
         );
     ''')
@@ -57,7 +57,8 @@ def catch_all(path):
     # Serve the React app's main file for any non-API route
     return send_from_directory('../dist', 'index.html')
 
-@app.route('/expenses', methods=['GET', 'POST'])
+@app.route('/api/expenses', methods=['GET', 'POST'])
+@app.route('/expenses', methods=['GET', 'POST'])  # backward-compat for old frontend bundles
 def handle_expenses():
     conn = get_db_connection()
     if request.method == 'GET':
@@ -65,20 +66,113 @@ def handle_expenses():
         cursor.execute('SELECT * FROM expenses ORDER BY id DESC')
         rows = cursor.fetchall()
         expenses = [dict(row) for row in rows]
+        # Normalize locations JSON string to list
+        for item in expenses:
+            raw_loc = item.get('locations')
+            if isinstance(raw_loc, str) and raw_loc:
+                try:
+                    loaded = json.loads(raw_loc)
+                    item['locations'] = [str(x) for x in loaded] if isinstance(loaded, list) else []
+                except Exception:
+                    item['locations'] = []
+            elif isinstance(raw_loc, list):
+                item['locations'] = [str(x) for x in raw_loc]
+            else:
+                item['locations'] = []
         conn.close()
         return jsonify(expenses)
 
     if request.method == 'POST':
         data = request.get_json()
         cursor = conn.cursor()
-        query = "INSERT INTO expenses (date, expense_name, amount, currency, paid_by, category, status, receipt_url, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        values = (data.get('Date'), data.get('Expense_Name'), data.get('Amount'), data.get('Currency'), data.get('Paid_By'), data.get('Category'), data.get('Status'), data.get('Receipt_URL'), data.get('Notes'))
+        # Normalize "Paid By" to accept both 'paid_by' and 'Paid_By'
+        paid_by_value = data.get('paid_by') if data.get('paid_by') is not None else data.get('Paid_By')
+        # Handle category as simple text (support array by joining to a single string)
+        incoming_category = data.get('Category') if data.get('Category') is not None else data.get('category')
+        if isinstance(incoming_category, list):
+            category_text = ', '.join(str(x) for x in incoming_category)
+        elif isinstance(incoming_category, str):
+            category_text = incoming_category
+        else:
+            category_text = ''
+
+        # Handle locations as JSON array stored in DB
+        incoming_locations = data.get('locations')
+        if isinstance(incoming_locations, list):
+            locations_json = json.dumps([str(x) for x in incoming_locations])
+        else:
+            locations_json = json.dumps([])
+
+        query = "INSERT INTO expenses (date, expense_name, amount, currency, paid_by, category, locations, status, receipt_url, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        values = (
+            data.get('Date'),
+            data.get('Expense_Name'),
+            data.get('Amount'),
+            data.get('Currency'),
+            paid_by_value,
+            category_text,
+            locations_json,
+            data.get('Status'),
+            data.get('Receipt_URL'),
+            data.get('Notes')
+        )
         cursor.execute(query, values)
         conn.commit()
         conn.close()
         return jsonify({'status': 'success'}), 201
 
-@app.route('/upload', methods=['POST'])
+@app.route('/api/expenses/<int:expense_id>', methods=['DELETE'])
+@app.route('/expenses/<int:expense_id>', methods=['DELETE'])  # backward-compat
+def delete_expense(expense_id: int):
+    """Delete an expense by its ID.
+
+    Executes: DELETE FROM expenses WHERE id = ?
+    Returns 204 No Content on success, or 404 if nothing was deleted.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM expenses WHERE id = ?', (expense_id,))
+        conn.commit()
+        deleted = cursor.rowcount
+        cursor.close()
+        conn.close()
+        if deleted == 0:
+            return jsonify({'success': False, 'error': 'Not found'}), 404
+        # No content needed on successful delete
+        return ('', 204)
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/expenses/all', methods=['DELETE'])
+@app.route('/expenses/all', methods=['DELETE'])  # backward-compat
+def clear_all_expenses():
+    """Delete all expenses from the table.
+
+    Executes: DELETE FROM expenses
+    Returns 204 No Content on success.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM expenses')
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return ('', 204)
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/upload', methods=['POST'])
+@app.route('/upload', methods=['POST'])  # backward-compat
 def upload_file():
     if 'receipt' not in request.files: return jsonify({'error': 'No file part'}), 400
     file = request.files['receipt']
@@ -89,10 +183,11 @@ def upload_file():
         unique_filename = f"{timestamp}_{original_filename}"
         save_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(save_path)
-        return jsonify({'filePath': f'/uploads/{unique_filename}'}), 200
+        return jsonify({'filePath': f'/api/uploads/{unique_filename}'}), 200
     return jsonify({'error': 'An unknown error occurred'}), 500
 
-@app.route('/extract-details', methods=['POST'])
+@app.route('/api/extract-details', methods=['POST'])
+@app.route('/extract-details', methods=['POST'])  # backward-compat
 def extract_details():
     if 'receipt' not in request.files:
         return jsonify({'error': 'No image provided for extraction'}), 400
@@ -150,7 +245,8 @@ def extract_details():
         print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         return jsonify({"error": f"AI extraction failed. Server error: {str(e)}"}), 500
 
-@app.route('/uploads/<path:filename>')
+@app.route('/api/uploads/<path:filename>')
+@app.route('/uploads/<path:filename>')  # backward-compat
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 

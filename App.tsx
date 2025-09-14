@@ -7,8 +7,6 @@ import ExpenseList from './components/ExpenseList';
 import CameraView from './components/CameraView';
 import { SparklesIcon, PencilIcon } from './components/icons';
 
-const API_BASE_URL = 'http://127.0.0.1:5001';
-
 const ReceiptModal: React.FC<{ imageUrl: string; onClose: () => void; }> = ({ imageUrl, onClose }) => {
   return (
     <div
@@ -18,7 +16,7 @@ const ReceiptModal: React.FC<{ imageUrl: string; onClose: () => void; }> = ({ im
       aria-modal="true"
     >
       <div className="relative bg-white p-4 rounded-lg shadow-2xl max-w-3xl max-h-[90vh] w-full mx-4" onClick={e => e.stopPropagation()}>
-        <img src={`${API_BASE_URL}${imageUrl}`} alt="Receipt" className="w-full h-full object-contain max-h-[calc(90vh-60px)]" />
+        <img src={`http://127.0.0.1:5001${imageUrl}`} alt="Receipt" className="w-full h-full object-contain max-h-[calc(90vh-60px)]" />
         <button
           onClick={onClose}
           className="absolute -top-3 -right-3 w-8 h-8 bg-slate-700 text-white rounded-full flex items-center justify-center hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-white"
@@ -47,19 +45,21 @@ const App: React.FC = () => {
   const fetchExpenses = useCallback(async () => {
     try {
       setError(null);
-      const response = await fetch(`${API_BASE_URL}/expenses`);
+      const response = await fetch(`/api/expenses`);
       if (!response.ok) {
         throw new Error('Failed to fetch expenses');
       }
       const data = await response.json();
       // Map backend snake_case rows to frontend PascalCase Expense shape
       const mapped: Expense[] = (Array.isArray(data) ? data : []).map((row: any) => ({
+        id: typeof row.id === 'number' ? row.id : Number(row.id) || 0,
+        paidBy: row.paid_by ?? '',
         Date: row.date ?? '',
         Expense_Name: row.expense_name ?? '',
         Amount: typeof row.amount === 'number' ? row.amount : Number(row.amount) || 0,
         Currency: row.currency ?? 'USD',
-        Paid_By: row.paid_by ?? '',
-        Category: row.category ?? '',
+        Category: typeof row.category === 'string' ? row.category : '',
+        locations: Array.isArray(row.locations) ? row.locations.map((x: any) => String(x)) : [],
         Status: row.status ?? Status.Submitted,
         Receipt_URL: row.receipt_url ?? '',
         Notes: row.notes ?? '',
@@ -89,6 +89,26 @@ const App: React.FC = () => {
     }
   };
 
+  const handleClearAll = async () => {
+    const confirmed = window.confirm('This will permanently delete all expense history. Continue?');
+    if (!confirmed) return;
+    try {
+      setError(null);
+      const response = await fetch(`/api/expenses/all`, { method: 'DELETE' });
+      if (!response.ok && response.status !== 204) {
+        let errText = 'Failed to clear expenses';
+        try {
+          const errData = await response.json();
+          errText = errData?.error || errText;
+        } catch (_) {}
+        throw new Error(errText);
+      }
+      await fetchExpenses();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not clear expenses.');
+    }
+  };
+
   const handleExtract = useCallback(async () => {
     if (!selectedFile) {
       setError("Please select a receipt file first.");
@@ -101,7 +121,7 @@ const App: React.FC = () => {
     formData.append('receipt', selectedFile);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/extract-details`, {
+      const response = await fetch(`/api/extract-details`, {
         method: 'POST',
         body: formData,
       });
@@ -112,12 +132,14 @@ const App: React.FC = () => {
       const extractedData = await response.json();
 
       setExpenseData({
+        id: 0,
+        paidBy: '',
         Date: extractedData.Date || new Date().toISOString().slice(0, 10),
         Expense_Name: extractedData.Expense_Name || '',
         Amount: extractedData.Amount || 0,
         Currency: extractedData.Currency || 'THB',
-        Paid_By: '',
-        Category: extractedData.Category || '',
+        Category: typeof extractedData.Category === 'string' ? extractedData.Category : '',
+        locations: [],
         Status: Status.Submitted,
         Receipt_URL: '',
         Notes: '',
@@ -137,12 +159,14 @@ const App: React.FC = () => {
   
   const handleManualCreate = () => {
     setExpenseData({
+      id: 0,
+      paidBy: '',
       Date: new Date().toISOString().slice(0, 10),
       Expense_Name: '',
       Amount: 0,
       Currency: 'THB',
-      Paid_By: '',
       Category: '',
+      locations: [],
       Status: Status.Submitted,
       Receipt_URL: '',
       Notes: '',
@@ -164,7 +188,7 @@ const App: React.FC = () => {
       const formData = new FormData();
       formData.append('receipt', selectedFile);
       try {
-        const response = await fetch(`${API_BASE_URL}/upload`, {
+        const response = await fetch(`/api/upload`, {
           method: 'POST',
           body: formData,
         });
@@ -183,10 +207,22 @@ const App: React.FC = () => {
 
     // Step 3: Post the expense data to the backend
     try {
-      const response = await fetch(`${API_BASE_URL}/expenses`, {
+      const payload = {
+        Date: finalExpense.Date,
+        Expense_Name: finalExpense.Expense_Name,
+        Amount: finalExpense.Amount,
+        Currency: finalExpense.Currency,
+        paid_by: finalExpense.paidBy,
+        Category: finalExpense.Category,
+        locations: Array.isArray(finalExpense.locations) ? finalExpense.locations : [],
+        Status: finalExpense.Status,
+        Receipt_URL: finalExpense.Receipt_URL,
+        Notes: finalExpense.Notes,
+      };
+      const response = await fetch(`/api/expenses`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(finalExpense),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) throw new Error('Failed to save expense');
       // Step 4: Reset the form and refresh the expense list
@@ -206,9 +242,23 @@ const App: React.FC = () => {
     setReceiptImage('');
   }
 
-  // Note: Deleting expenses needs a backend endpoint. This is for a future step.
-  const handleDeleteExpense = (indexToDelete: number) => {
-    alert("Deleting from the database will be implemented next.");
+  const handleDeleteExpense = async (id: number) => {
+    try {
+      setError(null);
+      const response = await fetch(`/api/expenses/${id}`, { method: 'DELETE' });
+      if (!response.ok && response.status !== 204) {
+        // If backend returns 404/500 with JSON
+        let errText = 'Failed to delete expense';
+        try {
+          const errData = await response.json();
+          errText = errData?.error || errText;
+        } catch (_) {}
+        throw new Error(errText);
+      }
+      await fetchExpenses();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete expense.');
+    }
   };
   
   const handleCaptureReceipt = (file: File) => {
@@ -286,7 +336,7 @@ const App: React.FC = () => {
 
         </div>
 
-        <ExpenseList expenses={expenses} onDeleteExpense={handleDeleteExpense} onViewReceipt={setViewingReceiptUrl} />
+        <ExpenseList expenses={expenses} onDeleteExpense={handleDeleteExpense} onViewReceipt={setViewingReceiptUrl} onClearAll={handleClearAll} />
         
         <footer className="text-center text-sm text-slate-400 !mt-8">
           <p>Internal Expense Tool</p>

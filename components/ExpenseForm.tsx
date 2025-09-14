@@ -107,6 +107,14 @@ const ExpenseForm: React.FC<ExpenseFormProps> = ({ expense, onExpenseChange, onS
     onExpenseChange(name as keyof Expense, isNumber ? parseFloat(value) || 0 : value);
   };
 
+  // Toggle a location label on/off in the array
+  const toggleLocation = (label: string) => {
+    const current = Array.isArray(expense.locations) ? expense.locations : [];
+    const exists = current.includes(label);
+    const next = exists ? current.filter((c) => c !== label) : [...current, label];
+    onExpenseChange('locations', next);
+  };
+
   const validate = (): boolean => {
     const newErrors: Partial<Record<keyof Expense, string>> = {};
     if (!expense.Expense_Name.trim()) newErrors.Expense_Name = "Expense name is required.";
@@ -117,8 +125,8 @@ const ExpenseForm: React.FC<ExpenseFormProps> = ({ expense, onExpenseChange, onS
     }
     if (expense.Amount <= 0) newErrors.Amount = "Amount must be a positive number.";
     if (!expense.Currency.trim()) newErrors.Currency = "Currency is required.";
-    if (!expense.Category) newErrors.Category = "Please select a category.";
-    if (!expense.Paid_By.trim()) newErrors.Paid_By = "Payer name is required.";
+    if (!expense.Category || !expense.Category.trim()) newErrors.Category = "Category is required.";
+    if (!expense.paidBy.trim()) newErrors.paidBy = "Payer name is required.";
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -131,12 +139,12 @@ const ExpenseForm: React.FC<ExpenseFormProps> = ({ expense, onExpenseChange, onS
   const handleRecentPayerSelect: React.ChangeEventHandler<HTMLSelectElement> = (e) => {
     const val = e.target.value;
     if (val === '__add_new__') {
-      onExpenseChange('Paid_By', '');
+      onExpenseChange('paidBy', '');
       // reset select to placeholder
       e.target.value = '';
       setTimeout(() => paidByInputRef.current?.focus(), 0);
     } else if (val) {
-      onExpenseChange('Paid_By', val);
+      onExpenseChange('paidBy', val);
       addRecentPayer(val);
       // reset select to placeholder
       e.target.value = '';
@@ -169,12 +177,27 @@ const ExpenseForm: React.FC<ExpenseFormProps> = ({ expense, onExpenseChange, onS
           <InputField label="Currency" id="Currency" type="text" value={expense.Currency} onChange={handleChange} error={errors.Currency} />
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <SelectField label="Category" id="Category" value={expense.Category} onChange={handleChange} error={errors.Category}>
-            <option value="">Select Category</option>
-            {Object.values(Category).map(cat => <option key={cat} value={cat}>{cat}</option>)}
-          </SelectField>
           <div>
-            <InputField label="Paid By" id="Paid_By" type="text" value={expense.Paid_By} onChange={handleChange} onBlur={handlePaidByBlur} inputRef={paidByInputRef} error={errors.Paid_By} />
+            <InputField label="Category" id="Category" type="text" value={expense.Category} onChange={handleChange} error={errors.Category} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-600 mb-1">Locations</label>
+            <div className="grid grid-cols-2 gap-2">
+              {['Red Dragon','Mandarin','Shark BKK','Shark PTY','Fahrenheit','Bliss','Geisha','BB Gun'].map(label => (
+                <label key={label} className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={Array.isArray(expense.locations) ? expense.locations.includes(label) : false}
+                    onChange={() => toggleLocation(label)}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <InputField label="Paid By" id="paidBy" type="text" value={expense.paidBy} onChange={handleChange} onBlur={handlePaidByBlur} inputRef={paidByInputRef} error={errors.paidBy} />
             {recentPayers.length > 0 && (
               <div className="mt-2">
                 <label className="sr-only" htmlFor="recent-payers">Recent payers</label>

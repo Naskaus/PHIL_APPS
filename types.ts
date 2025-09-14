@@ -18,12 +18,14 @@ export enum Status {
 }
 
 export interface Expense {
+  id: number;
+  paidBy: string;
   Date: string; // YYYY-MM-DD
   Expense_Name: string;
   Amount: number;
   Currency: string;
-  Paid_By: PaidBy | '';
-  Category: Category | '';
+  Category: string;
+  locations: string[];
   Status: Status;
   Receipt_URL: string;
   Notes: string;

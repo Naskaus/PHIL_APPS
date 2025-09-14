@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, GenerateContentResponse, Part } from "@google/genai";
-import { Expense, PaidBy, Category, Status } from '../types';
+import { Expense, Category, Status } from '../types';
 import { GEMINI_PROMPT, EXPENSE_SCHEMA } from "../constants";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
@@ -35,11 +35,12 @@ const parseAndValidateExpense = (jsonString: string): Expense => {
 
         // Basic validation and type casting
         const expense: Expense = {
+            id: 0,
+            paidBy: typeof parsed.paid_by === 'string' ? parsed.paid_by : (typeof parsed.Paid_By === 'string' ? parsed.Paid_By : ''),
             Date: typeof parsed.Date === 'string' ? parsed.Date : new Date().toISOString().slice(0, 10),
             Expense_Name: typeof parsed.Expense_Name === 'string' ? parsed.Expense_Name : 'Unknown Expense',
             Amount: typeof parsed.Amount === 'number' ? parsed.Amount : 0,
             Currency: typeof parsed.Currency === 'string' ? parsed.Currency : 'THB',
-            Paid_By: Object.values(PaidBy).includes(parsed.Paid_By) ? parsed.Paid_By : '',
             Category: Object.values(Category).includes(parsed.Category) ? parsed.Category : Category.Other,
             Status: Status.Submitted,
             Receipt_URL: '',
