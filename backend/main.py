@@ -86,6 +86,13 @@ def init_db_command():
             connection.execute(create_sql)
             print("Database table 'expenses' checked/created (dialect: {} ).".format(dialect))
 
+# Expose as a Flask CLI command
+@app.cli.command("init-db")
+def init_db_cli_command():
+    """Crée les tables de la base de données."""
+    init_db_command()
+    print("Base de données initialisée.")
+
 # --- API ROUTES ---
 # Note: La gestion des routes reste très similaire, mais utilise l'engine SQLAlchemy
 
